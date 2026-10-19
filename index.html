@@ -95,6 +95,7 @@ pre{white-space:pre-wrap;font-family:var(--f-num);font-size:12px;background:var(
   <input id="pw2" type="password" placeholder="Repetir contraseña" autocomplete="off" aria-label="Repetir contraseña" hidden>
   <div id="lerr" class="err" role="alert"></div>
   <button class="btn" id="go">Desbloquear</button>
+  <button class="btn sec2" id="fp" hidden>Entrar con huella</button>
 </div>
 
 <div id="app" hidden>
@@ -246,7 +247,8 @@ function vAj(){
   <button class="btn sec2" id="wipe" style="color:var(--bad)">Borrar todo y empezar de cero</button></div></div>
   <div class="sec"><h2>Seguridad</h2>
   <div style="display:grid;gap:10px">
-  <button class="btn sec2" id="diag">Probar huella en este celular</button><pre id="dout" hidden></pre>
+  ${bioStored()?'<button class="btn sec2" id="biooff">Desactivar huella</button>':'<button class="btn sec2" id="bioon">Activar huella para entrar</button>'}
+  <button class="btn sec2" id="diag">Comprobar compatibilidad de huella</button><pre id="dout" hidden></pre>
   <button class="btn sec2" id="cpw">Cambiar contraseña maestra</button>
   <button class="btn sec2" id="lockn">Bloquear ahora</button></div>
   <p class="muted sm">Se bloquea sola tras 2 minutos sin uso y si dejás la app en segundo plano. Tus datos se guardan cifrados (AES-256) solo en este celular. La app nunca guarda claves de plataformas ni frases semilla.</p></div>`;
@@ -327,6 +329,7 @@ function lockMode(){
   $('#lt').textContent=first?'Creá tu contraseña maestra':'Mi Cartera';
   $('#pw2').hidden=!first;$('#hint').hidden=!first;
   $('#go').textContent=first?'Crear y entrar':'Desbloquear';
+  $('#fp').hidden=first||!bioStored();
 }
 function enter(){$('#lock').hidden=true;$('#app').hidden=false;S.tab=0;render();resetIdle();scrollTo(0,0)}
 function lockNow(){
@@ -337,14 +340,14 @@ function resetIdle(){clearTimeout(idle);if(KEY)idle=setTimeout(lockNow,120000)}
 ['pointerdown','keydown','touchstart','scroll'].forEach(ev=>addEventListener(ev,resetIdle,{passive:true}));
 document.addEventListener('visibilitychange',()=>{
   if(document.hidden)hiddenAt=Date.now();
-  else if(KEY&&Date.now()-hiddenAt>30000)lockNow();
+  else if(KEY&&Date.now()-hiddenAt>30000){lockNow();setTimeout(()=>bioUnlock(true),300)}
 });
 function loadSample(){
   const d=JSON.parse(JSON.stringify(SAMPLE));
   S.pos=d.pos.map(p=>{const q={...p,upd:Date.now()-p.age*864e5};delete q.age;return q});
   S.nid=d.nid;S.sample=true;render();
 }
-function wipeAll(){try{localStorage.removeItem(KEYSTORE)}catch(e){}lockNow()}
+function wipeAll(){try{localStorage.removeItem(KEYSTORE);localStorage.removeItem(BIOKEY)}catch(e){}lockNow()}
 async function exportBk(){
   const blob=new Blob([JSON.stringify(await seal())],{type:'application/json'});
   const a=document.createElement('a');a.href=URL.createObjectURL(blob);
@@ -364,7 +367,47 @@ function askPw(){
     const a=$('#npw1').value;
     if(a.length<10)return 'Usá al menos 10 caracteres.';
     if(a!==$('#npw2').value)return 'Las contraseñas no coinciden.';
-    SALT=crypto.getRandomValues(new Uint8Array(16));KEY=await derive(a,SALT,ITER);await persist();closeSheet();return true});
+    SALT=crypto.getRandomValues(new Uint8Array(16));KEY=await derive(a,SALT,ITER);await persist();
+    const hadBio=!!bioStored();try{localStorage.removeItem(BIOKEY)}catch(x){}
+    closeSheet();render();if(hadBio)modal('Huella desactivada','<p>Cambiaste la contraseña, así que la huella se desactivó. Volvé a activarla desde Ajustes.</p>',null);return true});
+}
+/* huella: WebAuthn con extensión PRF. La huella genera una clave que abre la contraseña guardada cifrada; sin la huella del celular esa clave no existe */
+const BIOKEY='cartera.bio';
+const rnd=n=>crypto.getRandomValues(new Uint8Array(n));
+function bioStored(){try{return JSON.parse(localStorage.getItem(BIOKEY))}catch(e){return null}}
+function bioErr(x,def){
+  if(x&&x.name==='NotAllowedError')return 'Cancelaste la huella.';
+  if(x&&x.message==='noprf')return 'Este celular no permite usar la huella como llave.';
+  if(x&&x.name==='OperationError')return 'Contraseña incorrecta.';
+  return def;
+}
+async function prfKey(cid,salt){
+  const cred=await navigator.credentials.get({publicKey:{challenge:rnd(32),rpId:location.hostname,allowCredentials:[{type:'public-key',id:unb64(cid)}],userVerification:'required',timeout:60000,extensions:{prf:{eval:{first:unb64(salt)}}}}});
+  const r=cred.getClientExtensionResults().prf;
+  if(!r||!r.results||!r.results.first)throw new Error('noprf');
+  const km=await crypto.subtle.importKey('raw',r.results.first,'HKDF',false,['deriveKey']);
+  return crypto.subtle.deriveKey({name:'HKDF',hash:'SHA-256',salt:new Uint8Array(32),info:te.encode('cartera-bio-v1')},km,{name:'AES-GCM',length:256},false,['encrypt','decrypt']);
+}
+async function enableBio(pw){
+  await open(stored(),pw);
+  const cred=await navigator.credentials.create({publicKey:{challenge:rnd(32),rp:{name:'Mi Cartera',id:location.hostname},user:{id:rnd(16),name:'mi-cartera',displayName:'Mi Cartera'},pubKeyCredParams:[{type:'public-key',alg:-7},{type:'public-key',alg:-257}],authenticatorSelection:{authenticatorAttachment:'platform',userVerification:'required',residentKey:'discouraged'},timeout:60000,extensions:{prf:{}}}});
+  const ext=cred.getClientExtensionResults();
+  if(!ext.prf||!ext.prf.enabled)throw new Error('noprf');
+  const cid=b64(new Uint8Array(cred.rawId)),salt=b64(rnd(32)),key=await prfKey(cid,salt),iv=rnd(12);
+  const ct=new Uint8Array(await crypto.subtle.encrypt({name:'AES-GCM',iv},key,te.encode(pw)));
+  localStorage.setItem(BIOKEY,JSON.stringify({v:1,cid,prfSalt:salt,iv:b64(iv),ct:b64(ct)}));
+}
+async function bioUnlock(auto){
+  const bio=bioStored(),b=stored(),err=$('#lerr');if(!bio||!b||KEY)return;
+  err.textContent='';
+  try{
+    const key=await prfKey(bio.cid,bio.prfSalt);
+    const pw=td.decode(await crypto.subtle.decrypt({name:'AES-GCM',iv:unb64(bio.iv)},key,unb64(bio.ct)));
+    $('#go').textContent='Abriendo…';
+    const r=await open(b,pw);KEY=r.key;SALT=r.salt;load(r.data);enter();
+  }catch(x){
+    if(!(auto&&x&&x.name==='NotAllowedError'))err.textContent=bioErr(x,'No se pudo usar la huella. Usá la contraseña.');
+  }finally{lockMode()}
 }
 $('#go').onclick=async()=>{
   const pw=$('#pw').value,b=stored(),err=$('#lerr'),btn=$('#go');err.textContent='';
@@ -386,7 +429,9 @@ $('#go').onclick=async()=>{
 };
 $('#pw').onkeydown=e=>{if(e.key==='Enter'){if($('#pw2').hidden)$('#go').click();else $('#pw2').focus()}};
 $('#pw2').onkeydown=e=>{if(e.key==='Enter')$('#go').click()};
+$('#fp').onclick=()=>bioUnlock(false);
 lockMode();
+if(bioStored()&&stored())setTimeout(()=>bioUnlock(true),400);
 if('serviceWorker' in navigator)addEventListener('load',()=>navigator.serviceWorker.register('sw.js').catch(()=>{}));
 /* eventos */
 document.addEventListener('click',e=>{
@@ -415,6 +460,11 @@ document.addEventListener('click',e=>{
   if(id==='smp'){loadSample()}
   if(id==='smpx'){S.pos=[];S.sample=false;render()}
   if(id==='cpw')askPw();
+  if(id==='biooff'){try{localStorage.removeItem(BIOKEY)}catch(x){}render()}
+  if(id==='bioon')modal('Activar huella','<p class="muted sm">Vas a confirmar con tu huella dos veces. Después vas a poder entrar sin escribir la contraseña. Si cambiás la contraseña maestra, la huella se desactiva.</p><label for="bpw">Contraseña maestra</label><input id="bpw" type="password" autocomplete="off">','Activar',async()=>{
+    const pw=$('#bpw').value;if(!pw)return 'Escribí tu contraseña maestra.';
+    try{await enableBio(pw);closeSheet();render();return true}
+    catch(x){return bioErr(x,'No se pudo activar la huella.')}});
   if(id==='wipe'){if(!e.target.dataset.sure){e.target.dataset.sure=1;e.target.textContent='¿Seguro? Se borra todo. Tocá de nuevo'}else wipeAll()}
 });
 document.addEventListener('change',async e=>{
