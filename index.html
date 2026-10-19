@@ -360,7 +360,13 @@ function modal(title,body,ok,fn){
   $('#sheet').hidden=false;
   $('#sheet').innerHTML=`<div role="dialog" aria-label="${esc(title)}"><h2>${esc(title)}</h2>${body}<div class="err" id="merr" role="alert"></div>${ok?`<button class="btn" id="mok">${esc(ok)}</button>`:''}<button class="btn link" id="mx" style="color:var(--muted)">${ok?'Cancelar':'Cerrar'}</button></div>`;
   $('#mx').onclick=closeSheet;
-  if(ok)$('#mok').onclick=async()=>{const r=await fn();if(r!==true)$('#merr').textContent=r||''};
+  const say=t=>{const m=$('#merr');if(m){m.style.color='var(--muted)';m.textContent=t}};
+  if(ok)$('#mok').onclick=async()=>{
+    const b=$('#mok'),m=$('#merr');b.disabled=true;m.style.color='';m.textContent='';
+    let r;try{r=await fn(say)}catch(x){r='Falló ('+(x&&x.name)+': '+(x&&x.message)+').'}
+    if(b.isConnected)b.disabled=false;
+    if(r!==true&&m.isConnected){m.style.color='';m.textContent=r||''}
+  };
 }
 function askPw(){
   modal('Cambiar contraseña maestra','<label for="npw1">Contraseña nueva</label><input id="npw1" type="password" autocomplete="off"><label for="npw2">Repetir contraseña nueva</label><input id="npw2" type="password" autocomplete="off">','Cambiar',async()=>{
@@ -381,21 +387,32 @@ function bioErr(x,def){
   if(x&&x.name==='OperationError')return 'Contraseña incorrecta.';
   return def;
 }
-async function prfKey(cid,salt){
+async function prfRaw(cid,salt){
   const cred=await navigator.credentials.get({publicKey:{challenge:rnd(32),rpId:location.hostname,allowCredentials:[{type:'public-key',id:unb64(cid)}],userVerification:'required',timeout:60000,extensions:{prf:{eval:{first:unb64(salt)}}}}});
   const r=cred.getClientExtensionResults().prf;
   if(!r||!r.results||!r.results.first)throw new Error('noprf');
-  const km=await crypto.subtle.importKey('raw',r.results.first,'HKDF',false,['deriveKey']);
+  return r.results.first;
+}
+async function keyFrom(raw){
+  const km=await crypto.subtle.importKey('raw',raw,'HKDF',false,['deriveKey']);
   return crypto.subtle.deriveKey({name:'HKDF',hash:'SHA-256',salt:new Uint8Array(32),info:te.encode('cartera-bio-v1')},km,{name:'AES-GCM',length:256},false,['encrypt','decrypt']);
 }
-async function enableBio(pw){
-  await open(stored(),pw);
-  const cred=await navigator.credentials.create({publicKey:{challenge:rnd(32),rp:{name:'Mi Cartera',id:location.hostname},user:{id:rnd(16),name:'mi-cartera',displayName:'Mi Cartera'},pubKeyCredParams:[{type:'public-key',alg:-7},{type:'public-key',alg:-257}],authenticatorSelection:{authenticatorAttachment:'platform',userVerification:'required',residentKey:'discouraged'},timeout:60000,extensions:{prf:{}}}});
+const prfKey=async(cid,salt)=>keyFrom(await prfRaw(cid,salt));
+/* el pedido de huella va primero, apenas se toca el botón; la contraseña se verifica después */
+async function enableBio(pw,say){
+  say('Confirmá con tu huella o el bloqueo del celular…');
+  const salt=rnd(32);
+  const cred=await navigator.credentials.create({publicKey:{challenge:rnd(32),rp:{name:'Mi Cartera',id:location.hostname},user:{id:rnd(16),name:'mi-cartera',displayName:'Mi Cartera'},pubKeyCredParams:[{type:'public-key',alg:-7},{type:'public-key',alg:-257}],authenticatorSelection:{authenticatorAttachment:'platform',userVerification:'required',residentKey:'required'},timeout:60000,extensions:{prf:{eval:{first:salt}}}}});
   const ext=cred.getClientExtensionResults();
-  if(!ext.prf||!ext.prf.enabled)throw new Error('noprf');
-  const cid=b64(new Uint8Array(cred.rawId)),salt=b64(rnd(32)),key=await prfKey(cid,salt),iv=rnd(12);
+  if(!ext.prf)throw new Error('noprf');
+  say('Comprobando la contraseña…');
+  await open(stored(),pw);
+  const cid=b64(new Uint8Array(cred.rawId));
+  let raw=ext.prf.results&&ext.prf.results.first;
+  if(!raw){say('Confirmá la huella una vez más…');raw=await prfRaw(cid,b64(salt))}
+  const key=await keyFrom(raw),iv=rnd(12);
   const ct=new Uint8Array(await crypto.subtle.encrypt({name:'AES-GCM',iv},key,te.encode(pw)));
-  localStorage.setItem(BIOKEY,JSON.stringify({v:1,cid,prfSalt:salt,iv:b64(iv),ct:b64(ct)}));
+  localStorage.setItem(BIOKEY,JSON.stringify({v:1,cid,prfSalt:b64(salt),iv:b64(iv),ct:b64(ct)}));
 }
 async function bioUnlock(auto){
   const bio=bioStored(),b=stored(),err=$('#lerr');if(!bio||!b||KEY)return;
@@ -461,10 +478,10 @@ document.addEventListener('click',e=>{
   if(id==='smpx'){S.pos=[];S.sample=false;render()}
   if(id==='cpw')askPw();
   if(id==='biooff'){try{localStorage.removeItem(BIOKEY)}catch(x){}render()}
-  if(id==='bioon')modal('Activar huella','<p class="muted sm">Vas a confirmar con tu huella dos veces. Después vas a poder entrar sin escribir la contraseña. Si cambiás la contraseña maestra, la huella se desactiva.</p><label for="bpw">Contraseña maestra</label><input id="bpw" type="password" autocomplete="off">','Activar',async()=>{
+  if(id==='bioon')modal('Activar huella','<p class="muted sm">Vas a confirmar con tu huella dos veces. Después vas a poder entrar sin escribir la contraseña. Si cambiás la contraseña maestra, la huella se desactiva.</p><label for="bpw">Contraseña maestra</label><input id="bpw" type="password" autocomplete="off">','Activar',async(say)=>{
     const pw=$('#bpw').value;if(!pw)return 'Escribí tu contraseña maestra.';
-    try{await enableBio(pw);closeSheet();render();return true}
-    catch(x){return bioErr(x,'No se pudo activar la huella.')}});
+    try{await enableBio(pw,say);closeSheet();render();return true}
+    catch(x){return bioErr(x,'No se pudo activar la huella ('+(x&&x.name)+': '+(x&&x.message)+').')}});
   if(id==='wipe'){if(!e.target.dataset.sure){e.target.dataset.sure=1;e.target.textContent='¿Seguro? Se borra todo. Tocá de nuevo'}else wipeAll()}
 });
 document.addEventListener('change',async e=>{
