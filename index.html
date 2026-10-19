@@ -137,7 +137,7 @@ const SAMPLE={
 };
 const DEFAULT_PLATS=()=>SAMPLE.plats.map(p=>({...p}));
 const QDEF={fxAuto:true,fxSrc:'bolsa',fxAt:0,tdKey:'',quotesAt:0,syncHash:'',syncAt:0};
-const S={tab:0,group:'Tipo',filter:'Todas',obj:{},plats:DEFAULT_PLATS(),pos:[],nid:100,fx:1450,sample:false,lastBackup:0,...QDEF};
+const S={tab:0,group:'Tipo',filter:'Todas',obj:{},plats:DEFAULT_PLATS(),pos:[],nid:100,fx:1450,sample:false,lastBackup:0,hist:[],...QDEF};
 let saveFail=false;
 const dias=p=>Math.floor((Date.now()-(p.pxAt||p.upd||0))/864e5);
 const $=s=>document.querySelector(s);
@@ -229,10 +229,11 @@ function vInv(){
 function vGraf(){
   if(!S.pos.length)return EMPTY;
   return `<div class="top"><h1>Gráficos</h1></div>
-  <h2>Por plataforma</h2>${bars(groups('Plataforma'))}
+  ${vEvol()}
+  <div class="sec"><h2>Por plataforma</h2>${bars(groups('Plataforma'))}</div>
   <div class="sec"><h2>Por moneda</h2>${bars(groups('Moneda'))}</div>
   <div class="sec"><h2>Por tipo</h2>${bars(groups('Tipo'))}</div>
-  <p class="muted sm sec">La evolución en el tiempo aparece cuando haya varias fechas guardadas.</p>`;
+  `;
 }
 function vAvisos(){
   if(!S.pos.length)return EMPTY;
@@ -273,12 +274,13 @@ function vAj(){
 }
 const VIEWS=[vResumen,vInv,vGraf,vAvisos,vAj];
 function render(){
-  persist();
+  recordHist();persist();
   $('#view').innerHTML=(saveFail?'<div class="alert">No se pudo guardar en este celular. Exportá un respaldo desde Ajustes.</div>':'')+VIEWS[S.tab]();
   const tp=$('#view .top');
   if(tp)tp.insertAdjacentHTML('beforeend',`<button class="eye" data-eye="1" aria-label="${hide?'Mostrar importes':'Ocultar importes'}" aria-pressed="${hide}">${hide?EYEOFF:EYE}</button>`);
   $('#tabs').innerHTML=TABS.map((t,i)=>`<button class="tab" role="tab" data-t="${i}" aria-selected="${S.tab===i}"><svg viewBox="0 0 24 24">${ICON[t[0]]}</svg>${t[1]}</button>`).join('');
   $('#fab').hidden=S.tab===4||S.tab===3;
+  if(S.tab===2)bindChart();
 }
 /* hoja agregar/editar */
 /* cotizaciones: solo se envían símbolos (BTC, SPY, nombre de fondo), nunca cantidades ni saldos */
@@ -402,6 +404,60 @@ function openSheet(id){
   };
 }
 function closeSheet(){$('#sheet').hidden=true;$('#sheet').innerHTML=''}
+/* evolución del patrimonio: un punto por día (valor total en dólares y tipo de cambio de ese día) */
+const todayStr=()=>{const d=new Date();return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')};
+function recordHist(){
+  if(!KEY||!S.pos.length)return;
+  const t=Math.round(total()*100)/100,d=todayStr(),last=S.hist[S.hist.length-1];
+  if(last&&last.d===d){last.usd=t;last.fx=FX}
+  else{S.hist.push({d,usd:t,fx:FX});if(S.hist.length>2000)S.hist.shift()}
+}
+let HR='3M',HCUR='USD',HSC=null;
+const RANGES={'1M':30,'3M':90,'1A':365,'Todo':99999};
+const money=v=>HCUR==='USD'?fU(v):fA(v);
+const fmtC=n=>new Intl.NumberFormat('es-AR',{notation:'compact',maximumFractionDigits:1}).format(n);
+const fmtD=d=>d.slice(8,10)+'/'+d.slice(5,7);
+function histSel(){
+  const cut=Date.now()-RANGES[HR]*864e5;
+  return S.hist.filter(h=>Date.parse(h.d+'T12:00:00')>=cut).map(h=>({d:h.d,v:HCUR==='USD'?h.usd:h.usd*h.fx}));
+}
+function vEvol(){
+  const pts=histSel();
+  const chips=`<div class="chips" role="group" aria-label="Período">${Object.keys(RANGES).map(k=>`<button class="chip" data-hr="${k}" aria-pressed="${HR===k}">${k}</button>`).join('')}<button class="chip" data-hc="1" style="margin-left:auto" aria-label="Cambiar moneda">${HCUR==='USD'?'US$':'$'} ⇄</button></div>`;
+  HSC=null;
+  if(pts.length<2)return `<h2>Evolución del patrimonio</h2>${chips}<p class="muted sm">Se guarda un punto por día cuando abrís la app. El gráfico aparece desde el segundo día${S.hist.length&&pts.length<2&&S.hist.length>1?'. Probá con un período más largo':''}.</p>`;
+  const W=340,H=170,L=8,R=8,T=14,B=22,vs=pts.map(p=>p.v),mn=Math.min(...vs),mx=Math.max(...vs),pad=(mx-mn)*0.15||mx*0.02||1,lo=mn-pad,hi=mx+pad;
+  const t0=Date.parse(pts[0].d),t1=Date.parse(pts[pts.length-1].d);
+  const X=d=>L+(Date.parse(d)-t0)/((t1-t0)||1)*(W-L-R),Y=v=>T+(1-(v-lo)/(hi-lo))*(H-T-B);
+  HSC={pts,X,Y,W};
+  const path=pts.map((p,i)=>(i?'L':'M')+X(p.d).toFixed(1)+' '+Y(p.v).toFixed(1)).join(' ');
+  const lp=pts[pts.length-1],area=path+' L'+X(lp.d).toFixed(1)+' '+(H-B)+' L'+X(pts[0].d).toFixed(1)+' '+(H-B)+' Z';
+  const first=pts[0].v,ch=lp.v-first,pc=first?ch/first*100:0,col=ch>=0?'var(--good)':'var(--bad)';
+  return `<h2>Evolución del patrimonio</h2>${chips}
+  <div class="num" id="hread" style="font-size:22px;font-weight:500">${money(lp.v)}</div>
+  <div class="sm" id="hsub" style="color:${col}">${ch>=0?'+':''}${hide?'':money(ch)+' · '}${(Math.round(pc*10)/10).toLocaleString('es-AR')}% en el período</div>
+  <svg id="hc" viewBox="0 0 ${W} ${H}" width="100%" style="touch-action:pan-y;margin-top:6px;display:block" role="img" aria-label="Evolución del patrimonio">
+   <line x1="${L}" x2="${W-R}" y1="${H-B}" y2="${H-B}" stroke="var(--line)"/>
+   <path d="${area}" fill="var(--accent)" opacity=".12"/>
+   <path d="${path}" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+   <circle id="hm" cx="${X(lp.d).toFixed(1)}" cy="${Y(lp.v).toFixed(1)}" r="4.5" fill="var(--accent)"/>
+   ${hide?'':`<text x="${L}" y="${T-3}" font-size="11" fill="var(--muted)">${fmtC(mx)}</text><text x="${L}" y="${H-B-5}" font-size="11" fill="var(--muted)">${fmtC(mn)}</text>`}
+   <text x="${L}" y="${H-6}" font-size="11" fill="var(--muted)">${fmtD(pts[0].d)}</text>
+   <text x="${W-R}" y="${H-6}" font-size="11" fill="var(--muted)" text-anchor="end">${fmtD(lp.d)}</text>
+  </svg>
+  <p class="muted sm" style="margin:4px 0 0">Tocá el gráfico para ver cada día. Incluye lo que sumás o retirás, no solo la ganancia.</p>`;
+}
+function bindChart(){
+  const svg=$('#hc');if(!svg||!HSC)return;
+  const {pts,X,Y,W}=HSC,rd=$('#hread'),m=$('#hm');
+  const move=e=>{
+    const r=svg.getBoundingClientRect(),x=(e.clientX-r.left)/r.width*W;
+    let b=0,bd=1e9;pts.forEach((p,i)=>{const d=Math.abs(X(p.d)-x);if(d<bd){bd=d;b=i}});
+    const p=pts[b];m.setAttribute('cx',X(p.d).toFixed(1));m.setAttribute('cy',Y(p.v).toFixed(1));
+    rd.innerHTML=`${money(p.v)} <span class="muted sm" style="font-family:var(--f-body)">${fmtD(p.d)}</span>`;
+  };
+  svg.addEventListener('pointerdown',move);svg.addEventListener('pointermove',e=>{if(e.pressure>0||e.pointerType==='mouse')move(e)});
+}
 /* cifrado y guardado: PBKDF2 (600.000 vueltas) deriva una clave AES-256-GCM de la contraseña; la clave vive solo en memoria */
 const KEYSTORE='cartera.v1',ITER=600000;
 let KEY=null,SALT=null,idle=null,hiddenAt=0;
@@ -412,7 +468,7 @@ async function derive(pw,salt,iter){
   const km=await crypto.subtle.importKey('raw',te.encode(pw),'PBKDF2',false,['deriveKey']);
   return crypto.subtle.deriveKey({name:'PBKDF2',salt,iterations:iter,hash:'SHA-256'},km,{name:'AES-GCM',length:256},false,['encrypt','decrypt']);
 }
-const snapshot=()=>({plats:S.plats,pos:S.pos,obj:S.obj,nid:S.nid,fx:S.fx,sample:S.sample,lastBackup:S.lastBackup,fxAuto:S.fxAuto,fxSrc:S.fxSrc,fxAt:S.fxAt,tdKey:S.tdKey,quotesAt:S.quotesAt,syncHash:S.syncHash,syncAt:S.syncAt});
+const snapshot=()=>({plats:S.plats,pos:S.pos,obj:S.obj,nid:S.nid,fx:S.fx,sample:S.sample,lastBackup:S.lastBackup,fxAuto:S.fxAuto,fxSrc:S.fxSrc,fxAt:S.fxAt,tdKey:S.tdKey,quotesAt:S.quotesAt,syncHash:S.syncHash,syncAt:S.syncAt,hist:S.hist});
 async function seal(){
   const iv=crypto.getRandomValues(new Uint8Array(12));
   const ct=new Uint8Array(await crypto.subtle.encrypt({name:'AES-GCM',iv},KEY,te.encode(JSON.stringify(snapshot()))));
@@ -429,10 +485,10 @@ async function open(blob,pw){
   return {key,salt,data:JSON.parse(td.decode(pt))};
 }
 function load(d){
-  Object.assign(S,{plats:d.plats,pos:d.pos,obj:d.obj||{},nid:d.nid||100,fx:d.fx||1450,sample:!!d.sample,lastBackup:d.lastBackup||0,fxAuto:d.fxAuto!==false,fxSrc:d.fxSrc||'bolsa',fxAt:d.fxAt||0,tdKey:d.tdKey||'',quotesAt:d.quotesAt||0,syncHash:d.syncHash||'',syncAt:d.syncAt||0});
+  Object.assign(S,{plats:d.plats,pos:d.pos,obj:d.obj||{},nid:d.nid||100,fx:d.fx||1450,sample:!!d.sample,lastBackup:d.lastBackup||0,fxAuto:d.fxAuto!==false,fxSrc:d.fxSrc||'bolsa',fxAt:d.fxAt||0,tdKey:d.tdKey||'',quotesAt:d.quotesAt||0,syncHash:d.syncHash||'',syncAt:d.syncAt||0,hist:Array.isArray(d.hist)?d.hist:[]});
   FX=S.fx;
 }
-function resetState(){Object.assign(S,{tab:0,group:'Tipo',filter:'Todas',obj:{},plats:DEFAULT_PLATS(),pos:[],nid:100,fx:1450,sample:false,lastBackup:0,...QDEF});FX=1450}
+function resetState(){Object.assign(S,{tab:0,group:'Tipo',filter:'Todas',obj:{},plats:DEFAULT_PLATS(),pos:[],nid:100,fx:1450,sample:false,lastBackup:0,hist:[],...QDEF});FX=1450}
 function stored(){try{return JSON.parse(localStorage.getItem(KEYSTORE))}catch(e){return null}}
 function lockMode(){
   const first=!stored();
@@ -692,6 +748,8 @@ if('serviceWorker' in navigator)addEventListener('load',()=>navigator.serviceWor
 /* eventos */
 document.addEventListener('click',e=>{
   if(e.target.closest('[data-q]')){refresh();return}
+  const hr=e.target.closest('[data-hr]');if(hr){HR=hr.dataset.hr;render();return}
+  if(e.target.closest('[data-hc]')){HCUR=HCUR==='USD'?'ARS':'USD';render();return}
   if(e.target.closest('[data-d]')){sync(true);return}
   if(e.target.id==='drvon'){dstat.err='';getToken('connect');return}
   if(e.target.id==='drvsync'){sync(true);return}
