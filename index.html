@@ -4,6 +4,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#0f6b5c">
 <link rel="manifest" href="manifest.webmanifest">
+<script src="https://accounts.google.com/gsi/client" async></script>
 <link rel="icon" href="icon-192.png">
 <title>Mi Cartera</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600&family=DM+Mono:wght@400;500&display=swap">
@@ -96,6 +97,7 @@ pre{white-space:pre-wrap;font-family:var(--f-num);font-size:12px;background:var(
   <div id="lerr" class="err" role="alert"></div>
   <button class="btn" id="go">Desbloquear</button>
   <button class="btn sec2" id="fp" hidden>Entrar con huella</button>
+  <button class="btn sec2" id="rst" hidden>Ya tengo una copia en Google Drive</button>
 </div>
 
 <div id="app" hidden>
@@ -135,7 +137,7 @@ const SAMPLE={
   nid:100
 };
 const DEFAULT_PLATS=()=>SAMPLE.plats.map(p=>({...p}));
-const QDEF={fxAuto:true,fxSrc:'bolsa',fxAt:0,tdKey:'',quotesAt:0};
+const QDEF={fxAuto:true,fxSrc:'bolsa',fxAt:0,tdKey:'',quotesAt:0,syncHash:'',syncAt:0};
 const S={tab:0,group:'Tipo',filter:'Todas',obj:{},plats:DEFAULT_PLATS(),pos:[],nid:100,fx:1450,sample:false,lastBackup:0,...QDEF};
 let saveFail=false;
 const dias=p=>Math.floor((Date.now()-(p.pxAt||p.upd||0))/864e5);
@@ -206,7 +208,9 @@ function vResumen(){
   const t=total(),d=groups(S.group),a=avisos().filter(x=>x[0]==='w')[0];
   return `<div class="top"><h1>Mi Cartera</h1>${S.sample?'<span class="ex">datos de ejemplo</span>':''}</div>
   <div class="muted sm">Patrimonio total</div><div class="big num">${fU(t)}</div><div class="num muted">${fP(t)}</div>
-  <div class="sm muted" style="display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap"><button class="chip" data-q="1" ${qStatus.busy?'disabled':''}>${qStatus.busy?'Actualizando…':'↻ Actualizar'}</button><span>${S.quotesAt?'Cotizaciones de hace '+ago(S.quotesAt):'Sin cotizaciones automáticas todavía'}</span></div>
+  <div class="sm muted" style="display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap"><button class="chip" data-q="1" ${qStatus.busy?'disabled':''}>${qStatus.busy?'Actualizando…':'↻ Actualizar'}</button><span>${S.quotesAt?'Cotizaciones de hace '+ago(S.quotesAt):'Sin cotizaciones automáticas todavía'}</span>
+  ${driveOn()?`<button class="chip" data-d="1" ${dstat.busy?'disabled':''}>${dstat.busy?'Sincronizando…':dstat.state==='needtap'?'☁ Tocá para sincronizar':'☁ Sincronizar'}</button>${dstat.at?`<span>Drive: hace ${ago(dstat.at)}</span>`:''}`:''}</div>
+  ${driveOn()&&dstat.err?`<div class="alert" style="margin-top:10px">${esc(dstat.err)}</div>`:''}
   ${qStatus.err.length?`<div class="alert" style="margin-top:10px">${qStatus.err.map(esc).join('<br>')}</div>`:''}
   ${a?`<div class="alert"><span>▲</span><span>${esc(a[1])}</span></div>`:''}
   <div class="chips" role="group" aria-label="Agrupar por">${['Tipo','Plataforma','Moneda'].map(k=>`<button class="chip" data-g="${k}" aria-pressed="${S.group===k}">${k}</button>`).join('')}</div>
@@ -250,6 +254,10 @@ function vAj(){
   <label for="fxi">Pesos por dólar${S.fxAuto?' (se actualiza solo)':' (manual)'}</label><input id="fxi" inputmode="decimal" value="${S.fx}" ${S.fxAuto?'disabled':''}>
   <label for="tdk">Clave de Twelve Data (para ETF y acciones)</label><input id="tdk" type="password" autocomplete="off" value="${esc(S.tdKey)}" placeholder="Pegá tu clave">
   <p class="muted sm" style="margin:6px 0 0">Gratis en <a href="https://twelvedata.com/pricing" target="_blank" rel="noopener" style="color:var(--accent)">twelvedata.com</a>. Solo se envían símbolos como SPY, nunca cantidades. La clave queda guardada cifrada con tus datos.</p></div>
+  <div class="sec"><h2>Google Drive</h2>
+  <p class="muted sm" style="margin-top:0">${driveOn()?'Conectado. Se guarda una copia cifrada en una carpeta oculta de tu Drive que solo esta app puede ver.':'Guarda una copia cifrada en una carpeta oculta de tu Drive, para recuperar tus datos si perdés el celular. Google solo ve un archivo ilegible.'}</p>
+  ${dstat.err?`<div class="alert" style="margin:0 0 10px">${esc(dstat.err)}</div>`:''}
+  <div style="display:grid;gap:10px">${driveOn()?'<button class="btn sec2" id="drvsync">Sincronizar ahora</button><button class="btn sec2" id="drvoff">Desconectar Drive</button>':'<button class="btn sec2" id="drvon">Conectar Google Drive</button>'}</div></div>
   <div class="sec"><h2>Datos</h2><div style="display:grid;gap:10px">
   <button class="btn sec2" id="bkx">Exportar respaldo cifrado</button>
   <button class="btn sec2" id="bki">Importar respaldo</button><input type="file" id="bkf" accept=".json,application/json" hidden>
@@ -405,15 +413,16 @@ async function derive(pw,salt,iter){
   const km=await crypto.subtle.importKey('raw',te.encode(pw),'PBKDF2',false,['deriveKey']);
   return crypto.subtle.deriveKey({name:'PBKDF2',salt,iterations:iter,hash:'SHA-256'},km,{name:'AES-GCM',length:256},false,['encrypt','decrypt']);
 }
-const snapshot=()=>({plats:S.plats,pos:S.pos,obj:S.obj,nid:S.nid,fx:S.fx,sample:S.sample,lastBackup:S.lastBackup,fxAuto:S.fxAuto,fxSrc:S.fxSrc,fxAt:S.fxAt,tdKey:S.tdKey,quotesAt:S.quotesAt});
+const snapshot=()=>({plats:S.plats,pos:S.pos,obj:S.obj,nid:S.nid,fx:S.fx,sample:S.sample,lastBackup:S.lastBackup,fxAuto:S.fxAuto,fxSrc:S.fxSrc,fxAt:S.fxAt,tdKey:S.tdKey,quotesAt:S.quotesAt,syncHash:S.syncHash,syncAt:S.syncAt});
 async function seal(){
   const iv=crypto.getRandomValues(new Uint8Array(12));
   const ct=new Uint8Array(await crypto.subtle.encrypt({name:'AES-GCM',iv},KEY,te.encode(JSON.stringify(snapshot()))));
-  return {v:1,iter:ITER,salt:b64(SALT),iv:b64(iv),ct:b64(ct)};
+  return {v:1,at:Date.now(),iter:ITER,salt:b64(SALT),iv:b64(iv),ct:b64(ct)};
 }
 async function persist(){
   if(!KEY)return;
   try{localStorage.setItem(KEYSTORE,JSON.stringify(await seal()));saveFail=false}catch(e){saveFail=true}
+  scheduleSync();
 }
 async function open(blob,pw){
   const salt=unb64(blob.salt),key=await derive(pw,salt,blob.iter||ITER);
@@ -421,7 +430,7 @@ async function open(blob,pw){
   return {key,salt,data:JSON.parse(td.decode(pt))};
 }
 function load(d){
-  Object.assign(S,{plats:d.plats,pos:d.pos,obj:d.obj||{},nid:d.nid||100,fx:d.fx||1450,sample:!!d.sample,lastBackup:d.lastBackup||0,fxAuto:d.fxAuto!==false,fxSrc:d.fxSrc||'bolsa',fxAt:d.fxAt||0,tdKey:d.tdKey||'',quotesAt:d.quotesAt||0});
+  Object.assign(S,{plats:d.plats,pos:d.pos,obj:d.obj||{},nid:d.nid||100,fx:d.fx||1450,sample:!!d.sample,lastBackup:d.lastBackup||0,fxAuto:d.fxAuto!==false,fxSrc:d.fxSrc||'bolsa',fxAt:d.fxAt||0,tdKey:d.tdKey||'',quotesAt:d.quotesAt||0,syncHash:d.syncHash||'',syncAt:d.syncAt||0});
   FX=S.fx;
 }
 function resetState(){Object.assign(S,{tab:0,group:'Tipo',filter:'Todas',obj:{},plats:DEFAULT_PLATS(),pos:[],nid:100,fx:1450,sample:false,lastBackup:0,...QDEF});FX=1450}
@@ -432,8 +441,9 @@ function lockMode(){
   $('#pw2').hidden=!first;$('#hint').hidden=!first;
   $('#go').textContent=first?'Crear y entrar':'Desbloquear';
   $('#fp').hidden=first||!bioStored();
+  $('#rst').hidden=!first;
 }
-function enter(){$('#lock').hidden=true;$('#app').hidden=false;S.tab=0;render();resetIdle();scrollTo(0,0);refresh()}
+function enter(){$('#lock').hidden=true;$('#app').hidden=false;S.tab=0;render();resetIdle();scrollTo(0,0);sync(true);refresh()}
 function lockNow(){
   clearTimeout(idle);KEY=null;SALT=null;resetState();closeSheet();
   $('#view').innerHTML='';$('#app').hidden=true;$('#lock').hidden=false;$('#pw').value='';$('#pw2').value='';$('#lerr').textContent='';lockMode();
@@ -449,7 +459,7 @@ function loadSample(){
   S.pos=d.pos.map(p=>{const q={...p,upd:Date.now()-p.age*864e5};delete q.age;return q});
   S.nid=d.nid;S.sample=true;render();
 }
-function wipeAll(){try{localStorage.removeItem(KEYSTORE);localStorage.removeItem(BIOKEY)}catch(e){}lockNow()}
+function wipeAll(){try{localStorage.removeItem(KEYSTORE);localStorage.removeItem(BIOKEY)}catch(e){}setDrive(false);lockNow()}
 async function exportBk(){
   const blob=new Blob([JSON.stringify(await seal())],{type:'application/json'});
   const a=document.createElement('a');a.href=URL.createObjectURL(blob);
@@ -548,6 +558,115 @@ $('#go').onclick=async()=>{
 };
 $('#pw').onkeydown=e=>{if(e.key==='Enter'){if($('#pw2').hidden)$('#go').click();else $('#pw2').focus()}};
 $('#pw2').onkeydown=e=>{if(e.key==='Enter')$('#go').click()};
+/* Google Drive: copia cifrada en la carpeta oculta de la app (permiso drive.appdata). Solo se sube el archivo ya cifrado */
+const CLIENT_ID='870795784766-3kjg6f3b27hgdidc0833fd6rt9qb4u30.apps.googleusercontent.com';
+const SCOPE='https://www.googleapis.com/auth/drive.appdata',DFILE='cartera.enc';
+const dstat={busy:false,state:'idle',err:'',at:0};
+let TOK=null,TOKEXP=0,syncTimer=null;
+const driveOn=()=>{try{return localStorage.getItem('cartera.drive')==='1'}catch(e){return false}};
+const setDrive=v=>{try{v?localStorage.setItem('cartera.drive','1'):localStorage.removeItem('cartera.drive')}catch(e){}};
+const tokOk=()=>!!TOK&&Date.now()<TOKEXP-60000;
+function getToken(){
+  if(tokOk())return Promise.resolve(TOK);
+  return new Promise((res,rej)=>{
+    if(!(window.google&&google.accounts&&google.accounts.oauth2))return rej(new Error('No cargó el servicio de Google. Revisá la conexión.'));
+    const tc=google.accounts.oauth2.initTokenClient({client_id:CLIENT_ID,scope:SCOPE,
+      callback:r=>{if(r.error)return rej(new Error('Google no autorizó: '+(r.error_description||r.error)));TOK=r.access_token;TOKEXP=Date.now()+(r.expires_in||3600)*1000;res(TOK)},
+      error_callback:e=>rej(new Error(e&&e.type==='popup_closed'?'Cerraste la ventana de Google.':e&&e.type==='popup_failed_to_open'?'El navegador bloqueó la ventana de Google. Tocá Sincronizar.':'No se pudo autorizar con Google.'))});
+    tc.requestAccessToken({prompt:''});
+  });
+}
+async function dapi(url,opt={}){
+  const r=await fetch(url,{...opt,headers:{Authorization:'Bearer '+TOK,...(opt.headers||{})}});
+  if(r.status===401){TOK=null;throw new Error('Google pidió autorizar de nuevo. Tocá Sincronizar.')}
+  if(!r.ok)throw new Error('Drive respondió '+r.status+'.');
+  return r;
+}
+async function dFind(){
+  const r=await dapi('https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&fields=files(id)&q='+encodeURIComponent("name='"+DFILE+"'"));
+  const j=await r.json();return j.files&&j.files[0]||null;
+}
+async function dGet(id){return (await dapi('https://www.googleapis.com/drive/v3/files/'+id+'?alt=media')).json()}
+async function dPut(id,blob){
+  const body=JSON.stringify(blob);
+  if(id){await dapi('https://www.googleapis.com/upload/drive/v3/files/'+id+'?uploadType=media',{method:'PATCH',headers:{'Content-Type':'application/json'},body});return id}
+  const bd='b'+Date.now(),meta=JSON.stringify({name:DFILE,parents:['appDataFolder']});
+  const mp='--'+bd+'\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n'+meta+'\r\n--'+bd+'\r\nContent-Type: application/json\r\n\r\n'+body+'\r\n--'+bd+'--';
+  const r=await dapi('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id',{method:'POST',headers:{'Content-Type':'multipart/related; boundary='+bd},body:mp});
+  return (await r.json()).id;
+}
+/* huella de los datos sin los campos que cambian solos; sirve para saber si hubo cambios desde la última sincronización */
+async function dhash(){
+  const d=snapshot();['syncHash','syncAt','quotesAt','fxAt'].forEach(k=>delete d[k]);
+  return b64(new Uint8Array(await crypto.subtle.digest('SHA-256',te.encode(JSON.stringify(d)))));
+}
+async function pushLocal(id){
+  const h=await dhash(),blob=await seal(),nid=await dPut(id,blob);
+  S.syncAt=blob.at;S.syncHash=h;dstat.at=Date.now();return nid;
+}
+async function adopt(remote,pw){
+  let key=KEY,salt=SALT,data;
+  if(remote.salt===b64(SALT)){data=JSON.parse(td.decode(await crypto.subtle.decrypt({name:'AES-GCM',iv:unb64(remote.iv)},KEY,unb64(remote.ct))))}
+  else{const r=await open(remote,pw);key=r.key;salt=r.salt;data=r.data}
+  KEY=key;SALT=salt;load(data);S.syncAt=remote.at;S.syncHash=await dhash();dstat.at=Date.now();await persist();
+}
+async function useDrive(remote){
+  if(remote.salt===b64(SALT)){await adopt(remote);closeSheet();render();return true}
+  modal('Contraseña de la copia de Drive','<p class="muted sm">La copia de Drive se cifró con otra clave. Ingresá la contraseña maestra que tenía.</p><label for="dpw">Contraseña</label><input id="dpw" type="password" autocomplete="off">','Restaurar',async()=>{
+    try{await adopt(remote,$('#dpw').value);closeSheet();render();return true}catch(e){return 'Contraseña incorrecta.'}});
+  return true;
+}
+function askConflict(c){
+  modal('Hay dos versiones','<p>Cambiaste datos en este celular y la copia de Drive también cambió. ¿Cuál querés conservar?</p><button class="btn sec2" id="ckeep">Conservar la de este celular</button>','Usar la de Drive',()=>useDrive(c.remote));
+  $('#ckeep').onclick=async()=>{
+    try{await pushLocal(c.id);dstat.state='ok';dstat.err=''}catch(e){dstat.state='err';dstat.err=e.message}
+    closeSheet();await persist();redraw();
+  };
+}
+async function sync(interactive){
+  if(!KEY||dstat.busy||!driveOn())return;
+  if(!tokOk()&&!interactive){dstat.state='needtap';redraw();return}
+  dstat.busy=true;dstat.err='';dstat.state='busy';redraw();
+  let conflict=null;
+  try{
+    await getToken();
+    const meta=await dFind(),h=await dhash();
+    if(!meta)await pushLocal(null);
+    else{
+      const remote=await dGet(meta.id),rc=remote.at!==S.syncAt,lc=h!==S.syncHash;
+      if(rc&&lc)conflict={remote,id:meta.id};
+      else if(rc)await useDrive(remote);
+      else if(lc)await pushLocal(meta.id);
+      else dstat.at=dstat.at||Date.now();
+    }
+    if(!conflict)dstat.state='ok';
+  }catch(e){dstat.state=/autoriz|ventana|bloque/i.test(e.message)?'needtap':'err';dstat.err=e.message}
+  finally{dstat.busy=false}
+  await persist();redraw();
+  if(conflict)askConflict(conflict);
+}
+function scheduleSync(){
+  if(!driveOn()||!tokOk()||dstat.busy||!KEY||dstat.state==='err')return;
+  clearTimeout(syncTimer);
+  syncTimer=setTimeout(async()=>{if(KEY&&await dhash()!==S.syncHash)sync(false)},4000);
+}
+async function restoreDrive(){
+  const err=$('#lerr'),pw=$('#pw').value;err.textContent='';
+  if(!pw){err.textContent='Escribí arriba la contraseña maestra que usabas.';return}
+  try{
+    err.textContent='Conectando con Google…';
+    await getToken();
+    const meta=await dFind();
+    if(!meta){err.textContent='No hay una copia en este Google Drive.';return}
+    const remote=await dGet(meta.id);
+    err.textContent='Abriendo…';
+    const r=await open(remote,pw);
+    KEY=r.key;SALT=r.salt;resetState();load(r.data);
+    S.syncAt=remote.at;S.syncHash=await dhash();dstat.at=Date.now();dstat.state='ok';
+    setDrive(true);await persist();
+    $('#pw').value='';$('#pw2').value='';err.textContent='';enter();
+  }catch(e){KEY=null;err.textContent=e&&e.name==='OperationError'?'Contraseña incorrecta.':(e&&e.message)||'No se pudo restaurar.'}
+}
 $('#fp').onclick=()=>bioUnlock(false);
 lockMode();
 if(bioStored()&&stored())setTimeout(()=>bioUnlock(true),400);
@@ -555,6 +674,11 @@ if('serviceWorker' in navigator)addEventListener('load',()=>navigator.serviceWor
 /* eventos */
 document.addEventListener('click',e=>{
   if(e.target.closest('[data-q]')){refresh();return}
+  if(e.target.closest('[data-d]')){sync(true);return}
+  if(e.target.id==='drvon'){dstat.err='';getToken().then(()=>{setDrive(true);dstat.state='idle';render();sync(true)}).catch(x=>{dstat.err=x.message;render()});return}
+  if(e.target.id==='drvsync'){sync(true);return}
+  if(e.target.id==='drvoff'){try{if(TOK)google.accounts.oauth2.revoke(TOK)}catch(x){}TOK=null;setDrive(false);dstat.state='idle';dstat.err='';render();return}
+  if(e.target.id==='rst'){restoreDrive();return}
   const ey=e.target.closest('[data-eye]');
   if(ey){hide=!hide;savePrefs();render();return}
   const th=e.target.closest('[data-th]');
@@ -585,7 +709,7 @@ document.addEventListener('click',e=>{
     const pw=$('#bpw').value;if(!pw)return 'Escribí tu contraseña maestra.';
     try{await enableBio(pw,say);closeSheet();render();return true}
     catch(x){return bioErr(x,'No se pudo activar la huella ('+(x&&x.name)+': '+(x&&x.message)+').')}});
-  if(id==='wipe'){if(!e.target.dataset.sure){e.target.dataset.sure=1;e.target.textContent='¿Seguro? Se borra todo. Tocá de nuevo'}else wipeAll()}
+  if(id==='wipe'){if(!e.target.dataset.sure){e.target.dataset.sure=1;e.target.textContent='¿Seguro? Se borra todo en este celular (la copia de Drive no). Tocá de nuevo'}else wipeAll()}
 });
 document.addEventListener('change',async e=>{
   const cid=e.target.id;
