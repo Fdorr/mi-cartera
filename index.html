@@ -135,9 +135,10 @@ const SAMPLE={
   nid:100
 };
 const DEFAULT_PLATS=()=>SAMPLE.plats.map(p=>({...p}));
-const S={tab:0,group:'Tipo',filter:'Todas',obj:{},plats:DEFAULT_PLATS(),pos:[],nid:100,fx:1450,sample:false,lastBackup:0};
+const QDEF={fxAuto:true,fxSrc:'bolsa',fxAt:0,tdKey:'',quotesAt:0};
+const S={tab:0,group:'Tipo',filter:'Todas',obj:{},plats:DEFAULT_PLATS(),pos:[],nid:100,fx:1450,sample:false,lastBackup:0,...QDEF};
 let saveFail=false;
-const dias=p=>Math.floor((Date.now()-(p.upd||0))/864e5);
+const dias=p=>Math.floor((Date.now()-(p.pxAt||p.upd||0))/864e5);
 const $=s=>document.querySelector(s);
 const esc=t=>String(t).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const usd=p=>p.cur==='ARS'?p.amt/FX:p.amt;
@@ -148,6 +149,9 @@ function savePrefs(){try{localStorage.setItem('cartera.prefs',JSON.stringify({hi
 function applyTheme(){const r=document.documentElement;if(theme==='system')r.removeAttribute('data-theme');else r.setAttribute('data-theme',theme)}
 applyTheme();
 const DOTS='••••••';
+const FXNAME={bolsa:'MEP (bolsa)',oficial:'oficial',blue:'blue',contadoconliqui:'CCL',cripto:'cripto'};
+const qStatus={busy:false,err:[]};
+const ago=t=>{const m=Math.round((Date.now()-t)/60000);return m<1?'menos de 1 min':m<60?m+' min':m<1440?Math.round(m/60)+' h':Math.round(m/1440)+' días'};
 const fU=n=>hide?'US$ '+DOTS:'US$ '+Math.round(n).toLocaleString('es-AR');
 const fP=n=>hide?'$ '+DOTS:'$ '+Math.round(n*FX).toLocaleString('es-AR');
 const fA=n=>hide?'$ '+DOTS:'$ '+Math.round(n).toLocaleString('es-AR');
@@ -189,7 +193,7 @@ function avisos(){
   if((g['Pesos']||0)/t>.15)A.push(['i',`Pesos: ${pct((g['Pesos']||0)/t*100)}`,'Parte de tu cartera pierde valor frente al dólar si hay devaluación.']);
   Object.entries(S.obj).forEach(([k,v])=>{if(!v)return;const a=(Object.fromEntries(groups('Tipo'))[k]||0)/t*100;
     if(Math.abs(a-v)>=5)A.push(['w',`${k}: ${pct(a)} vs objetivo ${v}%`,a>v?`Estás ${pct(a-v)} puntos por encima.`:`Estás ${pct(v-a)} puntos por debajo.`])});
-  S.pos.filter(p=>dias(p)>=14).forEach(p=>A.push(['i',`${p.name} sin actualizar hace ${dias(p)} días`,`Valor cargado a mano en ${pname(p.plat)}.`]));
+  S.pos.filter(p=>dias(p)>=14).forEach(p=>A.push(['i',`${p.name} sin actualizar hace ${dias(p)} días`,p.src&&p.src!=='manual'?`La cotización automática no llega (${pname(p.plat)}).`:`Valor cargado a mano en ${pname(p.plat)}.`]));
   const bk=S.lastBackup?Math.floor((Date.now()-S.lastBackup)/864e5):null;
   if(bk===null)A.push(['w','Todavía no hiciste un respaldo','Exportá una copia cifrada desde Ajustes y guardala en un lugar seguro.']);
   else if(bk>=30)A.push(['i',`Último respaldo: hace ${bk} días`,'Exportá una copia nueva desde Ajustes.']);
@@ -202,13 +206,15 @@ function vResumen(){
   const t=total(),d=groups(S.group),a=avisos().filter(x=>x[0]==='w')[0];
   return `<div class="top"><h1>Mi Cartera</h1>${S.sample?'<span class="ex">datos de ejemplo</span>':''}</div>
   <div class="muted sm">Patrimonio total</div><div class="big num">${fU(t)}</div><div class="num muted">${fP(t)}</div>
+  <div class="sm muted" style="display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap"><button class="chip" data-q="1" ${qStatus.busy?'disabled':''}>${qStatus.busy?'Actualizando…':'↻ Actualizar'}</button><span>${S.quotesAt?'Cotizaciones de hace '+ago(S.quotesAt):'Sin cotizaciones automáticas todavía'}</span></div>
+  ${qStatus.err.length?`<div class="alert" style="margin-top:10px">${qStatus.err.map(esc).join('<br>')}</div>`:''}
   ${a?`<div class="alert"><span>▲</span><span>${esc(a[1])}</span></div>`:''}
   <div class="chips" role="group" aria-label="Agrupar por">${['Tipo','Plataforma','Moneda'].map(k=>`<button class="chip" data-g="${k}" aria-pressed="${S.group===k}">${k}</button>`).join('')}</div>
   <div class="donut">${donut(d)}${legend(d)}</div>
   <div class="sec"><h2>Mayores posiciones</h2><div class="list">${[...S.pos].sort((a,b)=>usd(b)-usd(a)).slice(0,4).map(rowHtml).join('')}</div></div>
-  <p class="muted sm sec">Tipo de cambio de referencia: US$ 1 = $ ${FX.toLocaleString('es-AR')} (se cambia en Ajustes).</p>`;
+  <p class="muted sm sec">Tipo de cambio: US$ 1 = $ ${FX.toLocaleString('es-AR')} (${S.fxAuto?'dólar '+FXNAME[S.fxSrc]+', automático':'manual'}). Se cambia en Ajustes.</p>`;
 }
-function rowHtml(p){return `<button class="row" data-e="${p.id}"><div><b style="font-weight:500">${esc(p.name)}</b><small>${esc(pname(p.plat))} · ${p.type}</small></div><div class="r num">${p.cur==='ARS'?fA(p.amt):fU(p.amt)}<small>${p.cur==='ARS'?fU(usd(p)):fP(usd(p))}</small></div></button>`}
+function rowHtml(p){return `<button class="row" data-e="${p.id}"><div><b style="font-weight:500">${esc(p.name)}</b><small>${esc(pname(p.plat))} · ${p.type}${p.src&&p.src!=='manual'&&p.qty?' · '+p.qty.toLocaleString('es-AR')+' u.':''}</small></div><div class="r num">${p.cur==='ARS'?fA(p.amt):fU(p.amt)}<small>${p.cur==='ARS'?fU(usd(p)):fP(usd(p))}</small></div></button>`}
 function vInv(){
   const plats=['Todas',...S.plats.filter(p=>p.on).map(p=>p.name)];
   const l=S.pos.filter(p=>S.filter==='Todas'||pname(p.plat)===S.filter).sort((a,b)=>usd(b)-usd(a));
@@ -238,7 +244,12 @@ function vAj(){
   <div class="two">${TYPES.map(k=>`<div><label for="o${k}">${k} %</label><input id="o${k}" data-o="${k}" inputmode="numeric" value="${S.obj[k]||''}"></div>`).join('')}</div></div>
   <div class="sec"><h2>Apariencia</h2><div class="chips" role="group" aria-label="Tema">${[['system','Sistema'],['light','Claro'],['dark','Oscuro']].map(t=>`<button class="chip" data-th="${t[0]}" aria-pressed="${theme===t[0]}">${t[1]}</button>`).join('')}</div>
   <p class="muted sm" style="margin:0">El ojo de arriba oculta o muestra los importes en todas las pantallas.</p></div>
-  <div class="sec"><h2>Tipo de cambio</h2><label for="fxi">Pesos por dólar (referencia manual)</label><input id="fxi" inputmode="decimal" value="${S.fx}"></div>
+  <div class="sec"><h2>Cotizaciones</h2>
+  <label for="fxauto" style="display:flex;gap:8px;align-items:center;margin:0 0 8px;font-size:14px;color:var(--fg)"><input type="checkbox" id="fxauto" style="width:auto" ${S.fxAuto?'checked':''}>Tipo de cambio automático</label>
+  <label for="fxsrc">Dólar de referencia</label><select id="fxsrc">${Object.entries(FXNAME).map(([k,v])=>`<option value="${k}" ${S.fxSrc===k?'selected':''}>${v}</option>`).join('')}</select>
+  <label for="fxi">Pesos por dólar${S.fxAuto?' (se actualiza solo)':' (manual)'}</label><input id="fxi" inputmode="decimal" value="${S.fx}" ${S.fxAuto?'disabled':''}>
+  <label for="tdk">Clave de Twelve Data (para ETF y acciones)</label><input id="tdk" type="password" autocomplete="off" value="${esc(S.tdKey)}" placeholder="Pegá tu clave">
+  <p class="muted sm" style="margin:6px 0 0">Gratis en <a href="https://twelvedata.com/pricing" target="_blank" rel="noopener" style="color:var(--accent)">twelvedata.com</a>. Solo se envían símbolos como SPY, nunca cantidades. La clave queda guardada cifrada con tus datos.</p></div>
   <div class="sec"><h2>Datos</h2><div style="display:grid;gap:10px">
   <button class="btn sec2" id="bkx">Exportar respaldo cifrado</button>
   <button class="btn sec2" id="bki">Importar respaldo</button><input type="file" id="bkf" accept=".json,application/json" hidden>
@@ -263,33 +274,124 @@ function render(){
   $('#fab').hidden=S.tab===4||S.tab===3;
 }
 /* hoja agregar/editar */
+/* cotizaciones: solo se envían símbolos (BTC, SPY, nombre de fondo), nunca cantidades ni saldos */
+const CG={BTC:'bitcoin',ETH:'ethereum',USDT:'tether',USDC:'usd-coin'};
+async function getJSON(u){
+  const c=new AbortController(),t=setTimeout(()=>c.abort(),10000);
+  try{const r=await fetch(u,{signal:c.signal});if(!r.ok)throw new Error('HTTP '+r.status);return await r.json()}finally{clearTimeout(t)}
+}
+let FCI=null;
+async function fciList(){
+  if(FCI)return FCI;
+  const cats=['mercadoDinero','rentaFija','rentaVariable','rentaMixta','otros'];
+  const parts=await Promise.all(cats.map(c=>getJSON('https://api.argentinadatos.com/v1/finanzas/fci/'+c+'/ultimo').catch(()=>[])));
+  const m={};parts.flat().forEach(f=>{if(f&&f.fondo&&f.vcp>0)m[f.fondo]=f});
+  if(!Object.keys(m).length)throw new Error('sin datos');
+  return FCI=m;
+}
+const setPx=(p,v,at)=>{p.px=v;p.pxAt=at||Date.now();p.amt=(p.qty||0)*v};
+async function refresh(){
+  if(qStatus.busy||!KEY)return;
+  qStatus.busy=true;qStatus.err=[];redraw();
+  const T=[],P=s=>S.pos.filter(p=>p.src===s&&p.qty>0);
+  const cp=P('cripto');
+  if(cp.length)T.push((async()=>{
+    const ids=[...new Set(cp.map(p=>CG[p.sym]).filter(Boolean))];
+    const d=await getJSON('https://api.coingecko.com/api/v3/simple/price?ids='+ids.join(',')+'&vs_currencies=usd');
+    cp.forEach(p=>{const v=d[CG[p.sym]]&&d[CG[p.sym]].usd;if(v>0)setPx(p,v)});
+  })().catch(()=>qStatus.err.push('No se pudieron traer las cotizaciones de cripto.')));
+  const bp=P('bolsa');
+  if(bp.length){
+    if(!S.tdKey)qStatus.err.push('Falta la clave de Twelve Data (Ajustes) para cotizar ETF y acciones.');
+    else T.push((async()=>{
+      const syms=[...new Set(bp.map(p=>p.sym))];
+      const d=await getJSON('https://api.twelvedata.com/price?symbol='+encodeURIComponent(syms.join(','))+'&apikey='+encodeURIComponent(S.tdKey));
+      if(d.status==='error')throw new Error(d.message);
+      bp.forEach(p=>{const r=syms.length===1?d:d[p.sym];const v=r&&parseFloat(r.price);if(v>0)setPx(p,v)});
+    })().catch(()=>qStatus.err.push('No se pudieron traer las cotizaciones de ETF o acciones. Revisá la clave de Twelve Data.')));
+  }
+  const fp=P('fci');
+  if(fp.length)T.push((async()=>{
+    const L=await fciList();
+    fp.forEach(p=>{const f=L[p.sym];if(f)setPx(p,f.vcp,Date.parse(f.fecha)||Date.now())});
+  })().catch(()=>qStatus.err.push('No se pudieron traer los fondos comunes.')));
+  if(S.fxAuto)T.push(getJSON('https://dolarapi.com/v1/dolares/'+S.fxSrc).then(d=>{if(d.venta>0){S.fx=FX=d.venta;S.fxAt=Date.now()}else throw 0}).catch(()=>qStatus.err.push('No se pudo traer el tipo de cambio. Se usa el último valor.')));
+  await Promise.all(T);
+  if(KEY){if(T.length&&qStatus.err.length<T.length)S.quotesAt=Date.now();qStatus.busy=false;redraw()}else qStatus.busy=false;
+}
+function redraw(){
+  const a=document.activeElement;
+  if(KEY&&!(a&&a.tagName==='INPUT'))render();else persist();
+}
 function openSheet(id){
-  const p=id?S.pos.find(x=>x.id===id):{name:'',type:'Cripto',plat:S.plats.find(x=>x.on).id,cur:'USD',amt:'',upd:Date.now()};
+  const base={name:'',type:'Cripto',plat:(S.plats.find(x=>x.on)||S.plats[0]).id,cur:'USD',amt:'',src:'manual',sym:'',qty:''};
+  const p=id?{...base,...S.pos.find(x=>x.id===id)}:base;
   const opts=S.plats.filter(x=>x.on||x.id===p.plat).map(x=>`<option value="${x.id}" ${x.id===p.plat?'selected':''}>${esc(x.name)}</option>`).join('');
+  const sel=(v,l,cur)=>`<option value="${v}" ${v===cur?'selected':''}>${l}</option>`;
   $('#sheet').hidden=false;
   $('#sheet').innerHTML=`<div role="dialog" aria-label="${id?'Editar':'Nueva'} inversión"><h2>${id?'Editar':'Nueva'} inversión</h2>
+  <label for="fsrc">Cómo se calcula el valor</label><select id="fsrc">${sel('manual','Lo cargo a mano',p.src)}${sel('cripto','Automático: cripto',p.src)}${sel('bolsa','Automático: ETF o acción',p.src)}${sel('fci','Automático: fondo común',p.src)}</select>
   <label for="fn">Nombre o símbolo</label><input id="fn" value="${esc(p.name)}" placeholder="BTC, SPY, Fondo dólares">
   <div class="two"><div><label for="ft">Tipo</label><select id="ft">${TYPES.map(t=>`<option ${t===p.type?'selected':''}>${t}</option>`).join('')}</select></div>
   <div><label for="fc">Moneda</label><select id="fc"><option ${p.cur==='USD'?'selected':''}>USD</option><option ${p.cur==='ARS'?'selected':''}>ARS</option></select></div></div>
   <label for="fp2">Plataforma</label><select id="fp2">${opts}<option value="new">+ Nueva plataforma…</option></select>
   <input id="fnp" placeholder="Nombre de la nueva plataforma" hidden style="margin-top:8px">
-  <label for="fa">Valor actual</label><input id="fa" inputmode="decimal" value="${p.amt}" placeholder="8100">
-  <div class="err" id="ferr"></div>
+  <div id="bm"><label for="fa">Valor actual</label><input id="fa" inputmode="decimal" value="${p.src==='manual'?p.amt:''}" placeholder="8100"></div>
+  <div id="bc"><label for="fcoin">Moneda cripto</label><select id="fcoin">${Object.keys(CG).map(k=>sel(k,k,p.sym)).join('')}</select></div>
+  <div id="bb"><label for="fsym">Símbolo (como en Twelve Data)</label><input id="fsym" value="${p.src==='bolsa'?esc(p.sym):''}" placeholder="SPY"></div>
+  <div id="bf"><label for="fsearch">Buscar fondo</label><input id="fsearch" placeholder="Ej: Ahorro Dólares" autocomplete="off">
+  <select id="ffund" style="margin-top:8px"><option value="${p.src==='fci'?esc(p.sym):''}">${p.src==='fci'?esc(p.sym):'Escribí arriba para buscar'}</option></select><div class="muted sm" id="fmsg"></div></div>
+  <div id="bq"><label for="fq" id="fql">Cantidad</label><input id="fq" inputmode="decimal" value="${p.qty||''}" placeholder="0,12"></div>
+  <div class="err" id="ferr" role="alert"></div>
   <button class="btn" id="fs">Guardar</button>
   <div style="display:flex;justify-content:space-between;margin-top:6px"><button class="btn link" id="fx" style="color:var(--muted)">Cancelar</button>${id?'<button class="btn link" id="fd">Eliminar</button>':''}</div></div>`;
+  const show=()=>{
+    const s=$('#fsrc').value;
+    $('#bm').hidden=s!=='manual';$('#bc').hidden=s!=='cripto';$('#bb').hidden=s!=='bolsa';$('#bf').hidden=s!=='fci';$('#bq').hidden=s==='manual';
+    $('#fql').textContent=s==='fci'?'Cuotapartes':'Cantidad';
+    if(s==='cripto'||s==='bolsa'){$('#fc').value='USD';$('#fc').disabled=true}else $('#fc').disabled=false;
+  };
+  show();
+  $('#fsrc').onchange=()=>{const s=$('#fsrc').value;show();
+    if(s==='cripto'){$('#ft').value=/USD[TC]/.test($('#fcoin').value)?'Stablecoin':'Cripto'}
+    if(s==='bolsa')$('#ft').value='ETF';
+    if(s==='fci')$('#ft').value='Fondo'};
+  $('#fcoin').onchange=()=>{$('#ft').value=/USD[TC]/.test($('#fcoin').value)?'Stablecoin':'Cripto'};
   $('#fp2').onchange=e=>{$('#fnp').hidden=e.target.value!=='new'};
+  let tm;
+  $('#fsearch').oninput=()=>{clearTimeout(tm);tm=setTimeout(async()=>{
+    const q=$('#fsearch').value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    if(!q.length)return;
+    $('#fmsg').textContent='Buscando…';
+    try{
+      const L=await fciList(),m=Object.keys(L).filter(n=>q.every(w=>n.toLowerCase().includes(w))).slice(0,40);
+      $('#ffund').innerHTML=m.length?m.map(n=>`<option>${esc(n)}</option>`).join(''):'<option value="">Sin resultados</option>';
+      $('#fmsg').textContent=m.length?m.length+' resultados. Elegí el fondo y la clase exactos.':'';
+    }catch(x){$('#fmsg').textContent='No se pudo cargar la lista de fondos. Cargalo a mano.'}
+  },300)};
   $('#fx').onclick=closeSheet;
   if(id)$('#fd').onclick=()=>{S.pos=S.pos.filter(x=>x.id!==id);closeSheet();render()};
   $('#fs').onclick=()=>{
-    const name=$('#fn').value.trim(),amt=parseFloat($('#fa').value.replace(',','.'));
-    if(!name){$('#ferr').textContent='Escribí un nombre o símbolo.';return}
-    if(!(amt>=0)){$('#ferr').textContent='Ingresá un valor numérico.';return}
+    const err=t=>{$('#ferr').textContent=t};
+    const src=$('#fsrc').value,num=v=>parseFloat(String(v).replace(',','.'));
+    let name=$('#fn').value.trim(),sym='',qty,amt=0;
+    if(src==='manual'){amt=num($('#fa').value);if(!(amt>=0))return err('Ingresá un valor numérico.')}
+    else{
+      qty=num($('#fq').value);if(!(qty>0))return err('Ingresá la cantidad.');
+      if(src==='cripto')sym=$('#fcoin').value;
+      if(src==='bolsa'){sym=$('#fsym').value.trim().toUpperCase();if(!sym)return err('Escribí el símbolo, por ejemplo SPY.')}
+      if(src==='fci'){sym=$('#ffund').value;if(!sym)return err('Buscá y elegí un fondo.')}
+    }
+    if(!name)name=sym||'';
+    if(!name)return err('Escribí un nombre o símbolo.');
     let pl=$('#fp2').value;
-    if(pl==='new'){const n=$('#fnp').value.trim();if(!n){$('#ferr').textContent='Escribí el nombre de la plataforma.';return}
+    if(pl==='new'){const n=$('#fnp').value.trim();if(!n)return err('Escribí el nombre de la plataforma.');
       const np={id:++S.nid,name:n,on:1};S.plats.push(np);pl=np.id}
-    const rec={id:id||++S.nid,name,type:$('#ft').value,plat:+pl,cur:$('#fc').value,amt,upd:Date.now()};
+    const old=id?S.pos.find(x=>x.id===id):null,same=old&&old.src===src&&old.sym===sym;
+    const rec={id:id||++S.nid,name,type:$('#ft').value,plat:+pl,cur:$('#fc').value,amt,src,sym,upd:Date.now()};
+    if(src!=='manual'){rec.qty=qty;if(same&&old.px){rec.px=old.px;rec.pxAt=old.pxAt;rec.amt=qty*old.px}}
     if(id)S.pos=S.pos.map(x=>x.id===id?rec:x);else S.pos.push(rec);
-    closeSheet();render();
+    closeSheet();render();if(src!=='manual')refresh();
   };
 }
 function closeSheet(){$('#sheet').hidden=true;$('#sheet').innerHTML=''}
@@ -303,7 +405,7 @@ async function derive(pw,salt,iter){
   const km=await crypto.subtle.importKey('raw',te.encode(pw),'PBKDF2',false,['deriveKey']);
   return crypto.subtle.deriveKey({name:'PBKDF2',salt,iterations:iter,hash:'SHA-256'},km,{name:'AES-GCM',length:256},false,['encrypt','decrypt']);
 }
-const snapshot=()=>({plats:S.plats,pos:S.pos,obj:S.obj,nid:S.nid,fx:S.fx,sample:S.sample,lastBackup:S.lastBackup});
+const snapshot=()=>({plats:S.plats,pos:S.pos,obj:S.obj,nid:S.nid,fx:S.fx,sample:S.sample,lastBackup:S.lastBackup,fxAuto:S.fxAuto,fxSrc:S.fxSrc,fxAt:S.fxAt,tdKey:S.tdKey,quotesAt:S.quotesAt});
 async function seal(){
   const iv=crypto.getRandomValues(new Uint8Array(12));
   const ct=new Uint8Array(await crypto.subtle.encrypt({name:'AES-GCM',iv},KEY,te.encode(JSON.stringify(snapshot()))));
@@ -319,10 +421,10 @@ async function open(blob,pw){
   return {key,salt,data:JSON.parse(td.decode(pt))};
 }
 function load(d){
-  Object.assign(S,{plats:d.plats,pos:d.pos,obj:d.obj||{},nid:d.nid||100,fx:d.fx||1450,sample:!!d.sample,lastBackup:d.lastBackup||0});
+  Object.assign(S,{plats:d.plats,pos:d.pos,obj:d.obj||{},nid:d.nid||100,fx:d.fx||1450,sample:!!d.sample,lastBackup:d.lastBackup||0,fxAuto:d.fxAuto!==false,fxSrc:d.fxSrc||'bolsa',fxAt:d.fxAt||0,tdKey:d.tdKey||'',quotesAt:d.quotesAt||0});
   FX=S.fx;
 }
-function resetState(){Object.assign(S,{tab:0,group:'Tipo',filter:'Todas',obj:{},plats:DEFAULT_PLATS(),pos:[],nid:100,fx:1450,sample:false,lastBackup:0});FX=1450}
+function resetState(){Object.assign(S,{tab:0,group:'Tipo',filter:'Todas',obj:{},plats:DEFAULT_PLATS(),pos:[],nid:100,fx:1450,sample:false,lastBackup:0,...QDEF});FX=1450}
 function stored(){try{return JSON.parse(localStorage.getItem(KEYSTORE))}catch(e){return null}}
 function lockMode(){
   const first=!stored();
@@ -331,7 +433,7 @@ function lockMode(){
   $('#go').textContent=first?'Crear y entrar':'Desbloquear';
   $('#fp').hidden=first||!bioStored();
 }
-function enter(){$('#lock').hidden=true;$('#app').hidden=false;S.tab=0;render();resetIdle();scrollTo(0,0)}
+function enter(){$('#lock').hidden=true;$('#app').hidden=false;S.tab=0;render();resetIdle();scrollTo(0,0);refresh()}
 function lockNow(){
   clearTimeout(idle);KEY=null;SALT=null;resetState();closeSheet();
   $('#view').innerHTML='';$('#app').hidden=true;$('#lock').hidden=false;$('#pw').value='';$('#pw2').value='';$('#lerr').textContent='';lockMode();
@@ -452,6 +554,7 @@ if(bioStored()&&stored())setTimeout(()=>bioUnlock(true),400);
 if('serviceWorker' in navigator)addEventListener('load',()=>navigator.serviceWorker.register('sw.js').catch(()=>{}));
 /* eventos */
 document.addEventListener('click',e=>{
+  if(e.target.closest('[data-q]')){refresh();return}
   const ey=e.target.closest('[data-eye]');
   if(ey){hide=!hide;savePrefs();render();return}
   const th=e.target.closest('[data-th]');
@@ -485,6 +588,9 @@ document.addEventListener('click',e=>{
   if(id==='wipe'){if(!e.target.dataset.sure){e.target.dataset.sure=1;e.target.textContent='¿Seguro? Se borra todo. Tocá de nuevo'}else wipeAll()}
 });
 document.addEventListener('change',async e=>{
+  const cid=e.target.id;
+  if(cid==='fxauto'){S.fxAuto=e.target.checked;render();if(S.fxAuto)refresh();return}
+  if(cid==='fxsrc'){S.fxSrc=e.target.value;persist();if(S.fxAuto)refresh();return}
   if(e.target.id!=='bkf'||!e.target.files[0])return;
   const f=e.target.files[0];e.target.value='';
   let blob;try{blob=JSON.parse(await f.text());if(!blob.ct||!blob.salt)throw 0}catch(x){modal('Respaldo inválido','<p>Ese archivo no es un respaldo de Mi Cartera.</p>',null);return}
@@ -495,6 +601,7 @@ document.addEventListener('change',async e=>{
 document.addEventListener('input',e=>{
   const k=e.target.dataset&&e.target.dataset.o;
   if(k){const v=parseFloat(e.target.value);S.obj[k]=v>0?v:0;persist()}
+  if(e.target.id==='tdk'){S.tdKey=e.target.value.trim();persist()}
   if(e.target.id==='fxi'){const v=parseFloat(e.target.value.replace(',','.'));if(v>0){S.fx=FX=v;persist()}}
 });
 async function diag(){
