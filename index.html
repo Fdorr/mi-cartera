@@ -83,6 +83,9 @@ input:focus,select:focus,button:focus-visible{outline:2px solid var(--accent);ou
 .aviso b{display:block;font-weight:600;font-size:14.5px}
 .pill{flex:none;width:8px;border-radius:4px;background:var(--warn)}
 .pill.i{background:var(--c2)} .pill.ok{background:var(--good)}
+.foot{margin:40px 0 56px;padding-top:18px;border-top:1px solid var(--line);text-align:center;font-size:13px;color:var(--muted)}
+.foot a{color:var(--accent);display:inline-block;padding:12px 6px;text-decoration:none;font-weight:500}
+.foot a:hover{text-decoration:underline}
 pre{white-space:pre-wrap;font-family:var(--f-num);font-size:12px;background:var(--bg);border-radius:10px;padding:10px;margin:8px 0 0}
 </style>
 
@@ -272,10 +275,11 @@ function vAj(){
   <button class="btn sec2" id="lockn">Bloquear ahora</button></div>
   <p class="muted sm">Se bloquea sola tras 2 minutos sin uso y si dejás la app en segundo plano. Tus datos se guardan cifrados (AES-256) solo en este celular. La app nunca guarda claves de plataformas ni frases semilla.</p></div>`;
 }
+const FOOT='<footer class="foot">Desarrollado por FDR Ing. Informatica · <a href="https://www.fdr.com.ar" target="_blank" rel="noopener noreferrer">www.fdr.com.ar</a></footer>';
 const VIEWS=[vResumen,vInv,vGraf,vAvisos,vAj];
 function render(){
   recordHist();persist();
-  $('#view').innerHTML=(saveFail?'<div class="alert">No se pudo guardar en este celular. Exportá un respaldo desde Ajustes.</div>':'')+VIEWS[S.tab]();
+  $('#view').innerHTML=(saveFail?'<div class="alert">No se pudo guardar en este celular. Exportá un respaldo desde Ajustes.</div>':'')+VIEWS[S.tab]()+(S.tab===0?FOOT:'');
   const tp=$('#view .top');
   if(tp)tp.insertAdjacentHTML('beforeend',`<button class="eye" data-eye="1" aria-label="${hide?'Mostrar importes':'Ocultar importes'}" aria-pressed="${hide}">${hide?EYEOFF:EYE}</button>`);
   $('#tabs').innerHTML=TABS.map((t,i)=>`<button class="tab" role="tab" data-t="${i}" aria-selected="${S.tab===i}"><svg viewBox="0 0 24 24">${ICON[t[0]]}</svg>${t[1]}</button>`).join('');
